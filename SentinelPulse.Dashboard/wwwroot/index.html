@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SentinelPulse Dashboard</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background:#0b1020; color:#e6e8ef; }
+    h1 { margin: 0 0 12px; font-size: 22px; }
+    .subtitle { color:#9aa4bf; margin-bottom: 16px; }
+    .charts { display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:16px; margin: 16px 0; }
+    .chart-card { background:#121935; border:1px solid #1e2953; border-radius:10px; padding:12px; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap:12px; }
+    .card { background:#121935; border:1px solid #1e2953; border-radius:10px; padding:12px; }
+    .row { display:flex; justify-content:space-between; margin:4px 0; font-size:14px; }
+    .status { font-weight:600; }
+    .healthy { color:#21c55d; }
+    .degraded { color:#f59e0b; }
+    .unhealthy { color:#ef4444; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid currentColor; }
+    .muted { color:#9aa4bf; }
+    .footer { margin-top:16px; font-size:12px; color:#9aa4bf; }
+    pre { white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <h1>SentinelPulse</h1>
+  <div class="subtitle">Real-time health, latency, and error monitoring</div>
+
+  <div id="meta" class="muted">Connecting...</div>
+  <div class="charts">
+    <div class="chart-card">
+      <div class="muted" style="margin-bottom:8px;">Latency by Service (ms)</div>
+      <canvas id="latencyChart" height="160"></canvas>
+    </div>
+    <div class="chart-card">
+      <div class="muted" style="margin-bottom:8px;">Status Distribution</div>
+      <canvas id="statusChart" height="160"></canvas>
+    </div>
+  </div>
+  <div id="grid" class="grid" aria-live="polite"></div>
+  <div class="footer">Live updates via SignalR • Resilient fetching with fallback</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@8.0.7/dist/browser/signalr.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    const metaEl = document.getElementById('meta');
+    const gridEl = document.getElementById('grid');
+    const latencyCtx = document.getElementById('latencyChart').getContext('2d');
+    const statusCtx = document.getElementById('statusChart').getContext('2d');
+
+    let latencyChart, statusChart;
+
+    function statusClass(s) {
+      return s === 'healthy' ? 'healthy' : (s === 'degraded' ? 'degraded' : 'unhealthy');
+    }
+
+    function render(data) {
+      metaEl.textContent = `Last update: ${new Date(data.timestamp_ms).toLocaleTimeString()}`;
+      gridEl.innerHTML = '';
+      for (const svc of data.services) {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+          <div class="row">
+            <div><strong>${svc.name}</strong></div>
+            <div class="status ${statusClass(svc.status)}"><span class="pill">${svc.status}</span></div>
+          </div>
+          <div class="row"><div class="muted">CPU</div><div>${svc.cpu_load}%</div></div>
+          <div class="row"><div class="muted">Memory</div><div>${svc.memory_usage}%</div></div>
+          <div class="row"><div class="muted">Latency</div><div>${svc.latency_ms} ms</div></div>
+          <div class="row"><div class="muted">Errors</div><div>${svc.error_rate_pct}%</div></div>
+          <div class="row"><div class="muted">Anomaly</div><div>${svc.anomaly ? 'Yes' : 'No'} (score ${svc.anomaly_score})</div></div>
+        `;
+        gridEl.appendChild(card);
+      }
+
+      // Update charts
+      const labels = data.services.map(s => s.name);
+      const latencies = data.services.map(s => s.latency_ms);
+      const statusCounts = {
+        healthy: data.services.filter(s => s.status === 'healthy').length,
+        degraded: data.services.filter(s => s.status === 'degraded').length,
+        unhealthy: data.services.filter(s => s.status === 'unhealthy').length,
+      };
+
+      if (!latencyChart) {
+        latencyChart = new Chart(latencyCtx, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [{
+              label: 'Latency (ms)',
+              data: latencies,
+              backgroundColor: '#3b82f6',
+              borderColor: '#60a5fa',
+              borderWidth: 1
+            }]
+          },
+          options: {
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: '#c7d2fe' }, grid: { color: '#1e2953' } },
+              y: { beginAtZero: true, ticks: { color: '#c7d2fe' }, grid: { color: '#1e2953' } }
+            }
+          }
+        });
+      } else {
+        latencyChart.data.labels = labels;
+        latencyChart.data.datasets[0].data = latencies;
+        latencyChart.update();
+      }
+
+      if (!statusChart) {
+        statusChart = new Chart(statusCtx, {
+          type: 'doughnut',
+          data: {
+            labels: ['Healthy', 'Degraded', 'Unhealthy'],
+            datasets: [{
+              data: [statusCounts.healthy, statusCounts.degraded, statusCounts.unhealthy],
+              backgroundColor: ['#21c55d', '#f59e0b', '#ef4444'],
+              borderColor: '#0b1020',
+              borderWidth: 2
+            }]
+          },
+          options: {
+            plugins: { legend: { labels: { color: '#c7d2fe' } } }
+          }
+        });
+      } else {
+        statusChart.data.datasets[0].data = [statusCounts.healthy, statusCounts.degraded, statusCounts.unhealthy];
+        statusChart.update();
+      }
+    }
+
+    async function start() {
+      const connection = new signalR.HubConnectionBuilder()
+        .withUrl('/hubs/dashboard')
+        .withAutomaticReconnect()
+        .build();
+
+      connection.onreconnecting(() => metaEl.textContent = 'Reconnecting...');
+      connection.onreconnected(() => metaEl.textContent = 'Reconnected');
+      connection.onclose(() => metaEl.textContent = 'Disconnected');
+
+      connection.on('metricsUpdate', (json) => {
+        try {
+          const data = typeof json === 'string' ? JSON.parse(json) : json;
+          render(data);
+        } catch (e) {
+          console.error('Failed to parse metricsUpdate', e);
+        }
+      });
+
+      try {
+        await connection.start();
+        metaEl.textContent = 'Connected';
+      } catch (e) {
+        metaEl.textContent = 'Failed to connect';
+        console.error(e);
+      }
+    }
+
+    start();
+  </script>
+</body>
+</html>

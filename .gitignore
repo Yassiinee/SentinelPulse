@@ -1,0 +1,55 @@
+# Build outputs
+**/bin/
+**/obj/
+
+# Visual Studio/IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs/temp
+*.log
+*.tlog
+*.cache/
+[Tt]emp/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Python virtual envs (legacy backend folder)
+backend-fastapi/.venv/
+.venv/
+.env
+
+# NuGet
+packages/
+*.nupkg
+*.snupkg
+
+# Rider/Resharper
+_ReSharper*/
+*.DotSettings.user
+
+# Publish artifacts
+**/publish/
+**/artifacts/
+
+# Coverage
+coverage/
+*.coverage
+*.coveragexml
+
+# Tooling
+/.cache/
+/.idea_modules/
+
+# Secrets (prefer dotnet user-secrets)
+secrets.json
