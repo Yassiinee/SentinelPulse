@@ -5,11 +5,19 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using SentinelPulse.Api.Services;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Bind to a fixed port for easy consumption by the dashboard
-builder.WebHost.UseUrls("http://localhost:5080");
+// Bind to a fixed port with HTTP/1.1 + HTTP/2 (for REST + gRPC)
+builder.WebHost.ConfigureKestrel(o =>
+{
+    o.ListenLocalhost(5080, listenOptions =>
+    {
+        listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
+    });
+});
 
 // Swagger/OpenAPI
 builder.Services.AddEndpointsApiExplorer();
@@ -17,6 +25,9 @@ builder.Services.AddSwaggerGen();
 
 // Outbound HTTP
 builder.Services.AddHttpClient();
+
+// gRPC
+builder.Services.AddGrpc();
 
 builder.Services.AddCors(options =>
 {
@@ -44,6 +55,9 @@ app.UseSwagger();
 app.UseSwaggerUI();
 
 app.UseCors("Dashboard");
+
+// Map gRPC service
+app.MapGrpcService<MetricsServiceImpl>();
 
 app.MapGet("/metrics", async (IHttpClientFactory httpFactory, IConfiguration config) =>
 {
@@ -117,7 +131,7 @@ app.MapGet("/metrics", async (IHttpClientFactory httpFactory, IConfiguration con
         if (status == "healthy" && (latency > 600 || statusCode >= 400)) status = "degraded";
         if (latency > 1200) status = "unhealthy";
 
-        return new ServiceMetric(
+        return new RestServiceMetric(
             t.name,
             status,
             Math.Round(cpu, 2),
@@ -130,14 +144,14 @@ app.MapGet("/metrics", async (IHttpClientFactory httpFactory, IConfiguration con
     });
 
     var services = await Task.WhenAll(tasks);
-    return Results.Json(new MetricsResponse(nowMs, services));
+    return Results.Json(new RestMetricsResponse(nowMs, services));
 });
 
 app.MapGet("/", () => Results.Json(new { name = "SentinelPulse.Api", status = "ok" }));
 
 app.Run();
 
-public record ServiceMetric(
+public record RestServiceMetric(
     string name,
     string status,
     double cpu_load,
@@ -148,7 +162,7 @@ public record ServiceMetric(
     bool anomaly
 );
 
-public record MetricsResponse(long timestamp_ms, IEnumerable<ServiceMetric> services);
+public record RestMetricsResponse(long timestamp_ms, IEnumerable<RestServiceMetric> services);
 
 public class ExternalTarget
 {

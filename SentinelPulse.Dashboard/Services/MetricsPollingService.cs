@@ -5,6 +5,10 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using SentinelPulse.Dashboard.Hubs;
 using SentinelPulse.Dashboard.Resilience;
+using Grpc.Net.Client;
+using Google.Protobuf;
+using SentinelPulse.Grpc;
+using Grpc.Core;
 
 namespace SentinelPulse.Dashboard.Services
 {
@@ -12,57 +16,47 @@ namespace SentinelPulse.Dashboard.Services
     {
         private readonly ILogger<MetricsPollingService> _logger;
         private readonly IHubContext<DashboardHub> _hubContext;
-        private readonly ResilientHttpClient _client;
         private readonly IConfiguration _config;
 
         public MetricsPollingService(
             ILogger<MetricsPollingService> logger,
             IHubContext<DashboardHub> hubContext,
-            ResilientHttpClient client,
             IConfiguration config)
         {
             _logger = logger;
             _hubContext = hubContext;
-            _client = client;
             _config = config;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            var baseUrl = _config["Backend:BaseUrl"] ?? "http://127.0.0.1:8000";
-            var metricsPath = _config["Backend:MetricsPath"] ?? "/metrics";
-            var intervalSec = int.TryParse(_config["Backend:PollingIntervalSeconds"], out var s) ? s : 2;
-            var url = CombineUrl(baseUrl, metricsPath);
-
-            _logger.LogInformation("MetricsPollingService started. Polling {Url} every {Interval}s", url, intervalSec);
+            var apiBase = _config["Backend:BaseUrl"] ?? "http://localhost:5080";
+            _logger.LogInformation("MetricsPollingService (gRPC) connecting to {Api}", apiBase);
 
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
-                    var json = await _client.GetStringWithResilienceAsync(url, stoppingToken);
-                    if (string.IsNullOrWhiteSpace(json))
+                    // Create a gRPC channel (HTTP/2 over plaintext on localhost)
+                    using var channel = GrpcChannel.ForAddress(apiBase);
+                    var client = new MetricsService.MetricsServiceClient(channel);
+
+                    using var call = client.StreamMetrics(new Empty(), cancellationToken: stoppingToken);
+                    while (await call.ResponseStream.MoveNext(stoppingToken))
                     {
-                        json = ResilientHttpClient.BuildFallbackMetricsJson();
+                        var msg = call.ResponseStream.Current;
+                        var json = JsonFormatter.Default.Format(msg);
+                        await _hubContext.Clients.All.SendAsync("metricsUpdate", json, stoppingToken);
                     }
-
-                    // Validate it's JSON to avoid sending garbage
-                    using var doc = JsonDocument.Parse(json);
-
-                    await _hubContext.Clients.All.SendAsync("metricsUpdate", json, stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to fetch/broadcast metrics");
-                }
-
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(intervalSec), stoppingToken);
-                }
-                catch (TaskCanceledException)
-                {
-                    // ignore on shutdown
+                    _logger.LogWarning(ex, "gRPC stream disconnected. Reconnecting in 2s...");
+                    try { await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken); } catch { }
                 }
             }
         }

@@ -1,0 +1,26 @@
+syntax = "proto3";
+option csharp_namespace = "SentinelPulse.Grpc";
+package sentinelpulse;
+
+message Empty {}
+
+message ServiceMetric {
+  string name = 1;
+  string status = 2;           // healthy | degraded | unhealthy
+  double cpu_load = 3;
+  double memory_usage = 4;
+  double latency_ms = 5;
+  double error_rate_pct = 6;
+  double anomaly_score = 7;
+  bool anomaly = 8;
+}
+
+message MetricsResponse {
+  int64 timestamp_ms = 1;
+  repeated ServiceMetric services = 2;
+}
+
+service MetricsService {
+  rpc GetMetrics(Empty) returns (MetricsResponse);
+  rpc StreamMetrics(Empty) returns (stream MetricsResponse);
+}
